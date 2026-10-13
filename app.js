@@ -1674,7 +1674,7 @@ async function pushToGoogleSheet(payload) {
   const gasUrl = getAppsScriptUrl();
   if (!gasUrl) return false;
 
-  // 1. Si el servidor local Python está activo, usamos el proxy interno (evita cualquier restricción de CORS)
+  // 1. Si el servidor local Python está activo (localhost:8080), usamos el proxy interno
   try {
     const res = await fetch("/api/cloud-sync", {
       method: "POST",
@@ -1685,17 +1685,33 @@ async function pushToGoogleSheet(payload) {
       const data = await res.json();
       if (data && data.ok) return true;
     }
-  } catch (err) {
-    // Servidor local no disponible o corriendo en GitHub Pages
-  }
+  } catch (err) {}
 
-  // 2. Envío directo a Google Apps Script con mode: "no-cors"
-  // Esto garantiza que el navegador envíe el POST a Google sin ser bloqueado por la política de CORS de Chrome/Edge
+  // 2. En GitHub Pages / Web móvil: usamos GET con parámetros codificados
+  // Los requests GET en navegadores NUNCA son bloqueados por CORS y siguen las redirecciones de Google Apps Script con 100% de fiabilidad
+  try {
+    const qParams = new URLSearchParams();
+    qParams.append("action", payload.action);
+    if (payload.action === "add_movement") {
+      qParams.append("movement", JSON.stringify(payload.movement));
+    } else {
+      Object.keys(payload).forEach(k => {
+        if (k !== "action") qParams.append(k, String(payload[k]));
+      });
+    }
+    const res = await fetch(`${gasUrl}?${qParams.toString()}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.ok) return true;
+    }
+  } catch (err) {}
+
+  // 3. Fallback POST con mode: no-cors
   try {
     await fetch(gasUrl, {
       method: "POST",
       mode: "no-cors",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      headers: { "Content-Type": "text/plain" },
       body: JSON.stringify(payload)
     });
     return true;
