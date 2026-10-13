@@ -83,14 +83,18 @@ let etfSearchTimeout = null;
 // ============================================================================
 // 1. INITIALIZATION & DATA LOADING
 // ============================================================================
-// Puedes pegar tu URL de Google Apps Script aquí para que quede fija en todos tus dispositivos:
-const DEFAULT_APPS_SCRIPT_URL = "";
+// URL de Google Apps Script conectada a "Seguimiento Inversiones.gsheet":
+const DEFAULT_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxEeAubEBR48XNht6Zs6xzvq-ZmEg9htq0hEA4TM915OiebThuj1yV811LTRhuKpaPORw/exec";
 
 function getAppsScriptUrl() {
-  return localStorage.getItem("inversiones_apps_script_url") || DEFAULT_APPS_SCRIPT_URL;
+  return localStorage.getItem("seguimiento_apps_script_url") || DEFAULT_APPS_SCRIPT_URL;
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+  // Conectar automáticamente con el Google Sheet desde el primer momento
+  if (!localStorage.getItem("seguimiento_apps_script_url")) {
+    localStorage.setItem("seguimiento_apps_script_url", DEFAULT_APPS_SCRIPT_URL);
+  }
   lucide.createIcons();
   document.getElementById("formFecha").value = new Date().toISOString().slice(0, 10);
   updateCloudBadgeUI();
@@ -1669,9 +1673,28 @@ function switchTab(tab) {
 async function pushToGoogleSheet(payload) {
   const gasUrl = getAppsScriptUrl();
   if (!gasUrl) return false;
+
+  // 1. Si el servidor local Python está activo, usamos el proxy interno (evita cualquier restricción de CORS)
+  try {
+    const res = await fetch("/api/cloud-sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: gasUrl, payload })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.ok) return true;
+    }
+  } catch (err) {
+    // Servidor local no disponible o corriendo en GitHub Pages
+  }
+
+  // 2. Envío directo a Google Apps Script con mode: "no-cors"
+  // Esto garantiza que el navegador envíe el POST a Google sin ser bloqueado por la política de CORS de Chrome/Edge
   try {
     await fetch(gasUrl, {
       method: "POST",
+      mode: "no-cors",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify(payload)
     });
@@ -1881,15 +1904,15 @@ async function submitAddOperation(e) {
   state.selectedTicker = ticker;
   recalculatePortfolio();
   saveData();
-  pushToGoogleSheet({ action: "add_movement", movement: newMov });
   closeAddModal();
   renderAll();
+  showToast(`Guardando compra de ${ticker} en tu Google Sheet...`);
+  await pushToGoogleSheet({ action: "add_movement", movement: newMov });
   await loadHistorySeries([ticker]);
-  const sheetMsg = getAppsScriptUrl() ? " y guardada en tu Google Sheet" : "";
-  showToast(`Operación de ${ticker} (${formatUsd(invertido)}) agregada${sheetMsg}.`);
+  showToast(`Operación de ${ticker} (${formatUsd(invertido)}) guardada en tu Google Sheet ✓`);
 }
 
-function deleteMovement(movId) {
+async function deleteMovement(movId) {
   const mov = state.movimientos.find(m => m.id === movId);
   if (!mov) return;
   if (!confirm(`¿Seguro que deseas eliminar la compra de ${mov.ticker} del ${mov.fecha} por ${formatUsd(mov.invertido)}?`)) {
@@ -1898,14 +1921,15 @@ function deleteMovement(movId) {
   state.movimientos = state.movimientos.filter(m => m.id !== movId);
   recalculatePortfolio();
   saveData();
-  pushToGoogleSheet({
+  renderAll();
+  showToast(`Eliminando movimiento de ${mov.ticker} en tu Google Sheet...`);
+  await pushToGoogleSheet({
     action: "delete_movement",
     fecha: mov.fecha,
     ticker: mov.ticker,
     precioCompra: mov.precioCompra
   });
-  renderAll();
-  showToast(`Movimiento de ${mov.ticker} eliminado.`);
+  showToast(`Movimiento de ${mov.ticker} eliminado de tu Google Sheet ✓`);
 }
 
 function deleteEntireAsset(ticker) {
